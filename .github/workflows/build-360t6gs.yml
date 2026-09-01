@@ -79,41 +79,31 @@ jobs:
         
         echo "=== Creating configuration based on working release 2026.01.21-1858 ==="
         cat > .config <<'CONFIG_EOF'
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt7621=y
-CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=48
-
-# WiFi drivers & firmware
-CONFIG_PACKAGE_kmod-mt7915e=y
-CONFIG_PACKAGE_kmod-mt7915-firmware=y
-
-# Captive portal & Web Services (exact match to working release)
-CONFIG_PACKAGE_opennds=y
-CONFIG_PACKAGE_uhttpd=y
-CONFIG_PACKAGE_uhttpd-mod-ubus=y
-CONFIG_PACKAGE_libmicrohttpd-no-ssl=y
-
-# DNS
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_dnsmasq=n
-
-# WireGuard Built-in Support
-CONFIG_PACKAGE_kmod-wireguard=y
-CONFIG_PACKAGE_wireguard-tools=y
-CONFIG_PACKAGE_luci-proto-wireguard=y
-
-# Remove unnecessary heavy packages to prevent flash overflow
-CONFIG_PACKAGE_ppp=n
-CONFIG_PACKAGE_ppp-mod-pppoe=n
-CONFIG_PACKAGE_luci-app-samba4=n
-CONFIG_PACKAGE_luci-app-zerotier=n
-
-# Enable CCACHE
-CONFIG_CCACHE=y
-CONFIG_EOF
+        CONFIG_TARGET_ramips=y
+        CONFIG_TARGET_ramips_mt7621=y
+        CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
+        CONFIG_TARGET_ROOTFS_INITRAMFS=y
+        CONFIG_TARGET_ROOTFS_SQUASHFS=y
+        CONFIG_TARGET_ROOTFS_PARTSIZE=48
+        CONFIG_PACKAGE_kmod-mt7915e=y
+        CONFIG_PACKAGE_kmod-mt7915-firmware=y
+        CONFIG_PACKAGE_opennds=y
+        CONFIG_PACKAGE_uhttpd=y
+        CONFIG_PACKAGE_uhttpd-mod-ubus=y
+        CONFIG_PACKAGE_libmicrohttpd-no-ssl=y
+        CONFIG_PACKAGE_dnsmasq-full=y
+        CONFIG_PACKAGE_dnsmasq=n
+        CONFIG_PACKAGE_kmod-wireguard=y
+        CONFIG_PACKAGE_wireguard-tools=y
+        CONFIG_PACKAGE_luci-proto-wireguard=y
+        CONFIG_PACKAGE_ppp=n
+        CONFIG_PACKAGE_ppp-mod-pppoe=n
+        CONFIG_PACKAGE_luci-app-samba4=n
+        CONFIG_PACKAGE_luci-app-zerotier=n
+        CONFIG_CCACHE=y
+        CONFIG_EOF
+        
+        sed -i 's/^[ \t]*//' .config
         
         echo "=== Running defconfig ==="
         set +e
@@ -169,7 +159,6 @@ CONFIG_EOF
         UPLOAD_DIR="$HOME/firmware_upload"
         mkdir -p "$UPLOAD_DIR"
         
-        # Copy only binary firmware images & metadata
         cp -f *.bin "$UPLOAD_DIR/" 2>/dev/null || true
         cp -f *.manifest "$UPLOAD_DIR/" 2>/dev/null || true
         cp -f config.buildinfo "$UPLOAD_DIR/" 2>/dev/null || true
