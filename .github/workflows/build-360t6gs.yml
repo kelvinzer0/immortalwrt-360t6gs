@@ -3,7 +3,12 @@ name: Build ImmortalWrt for 360T6GS
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: write
+
 env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-18.06
   UPLOAD_BIN_DIR: false
@@ -168,6 +173,14 @@ jobs:
         echo "FIRMWARE_DIR=$UPLOAD_DIR" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      if: always() && steps.organize.outputs.status == 'success'
+      with:
+        name: immortalwrt-${{ env.DEVICE_NAME }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_DIR }}/
+        retention-days: 14
+
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
       if: steps.organize.outputs.status == 'success'
@@ -179,11 +192,3 @@ jobs:
         files: ${{ env.FIRMWARE_DIR }}/*
         draft: false
         prerelease: false
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success'
-      with:
-        name: immortalwrt-${{ env.DEVICE_NAME }}-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE_DIR }}/
-        retention-days: 14
