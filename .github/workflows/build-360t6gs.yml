@@ -1,0 +1,78 @@
+name: Build ImmortalWrt 360T6GS with WireGuard
+
+on:
+  workflow_dispatch:
+
+env:
+  DEVICE: "360_360t6gs"
+  OPENWRT_PATH: "openwrt"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev \
+            libssl-dev python3 python3-distutils rsync unzip zlib1g-dev \
+            file wget ccache || sudo apt install -y python3.10-distutils
+
+      - name: Clone Source
+        run: |
+          git clone --depth=1 https://github.com/immortalwrt/immortalwrt -b openwrt-18.06 $OPENWRT_PATH
+
+      - name: Configure Build
+        run: |
+          cd $OPENWRT_PATH
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+      
+          cat << 'CONFIG_EOF' > .config
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt7621=y
+          CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+          CONFIG_PACKAGE_kmod-mt7915e=y
+          CONFIG_PACKAGE_kmod-mt7915-firmware=y
+          
+          # WireGuard Built-in
+          CONFIG_PACKAGE_kmod-wireguard=y
+          CONFIG_PACKAGE_wireguard-tools=y
+          CONFIG_PACKAGE_luci-proto-wireguard=y
+          CONFIG_PACKAGE_luci-app-wireguard=y
+          
+          # Size optimization for 16MB Flash
+          # CONFIG_PACKAGE_luci-app-samba4 is not set
+          # CONFIG_PACKAGE_luci-app-zerotier is not set
+          # CONFIG_PACKAGE_luci-app-aria2 is not set
+          CONFIG_EOF
+      
+          make defconfig
+
+      - name: Download & Build
+        run: |
+          cd $OPENWRT_PATH
+          make -j$(nproc) download || true
+          make -j$(($(nproc) + 1))
+
+      - name: Prepare Clean Artifacts
+        run: |
+          cd $OPENWRT_PATH/bin/targets/ramips/mt7621/
+          mkdir -p /tmp/firmware
+          cp -f *360t6gs*.bin /tmp/firmware/ 2>/dev/null || cp -f *.bin /tmp/firmware/ 2>/dev/null || true
+          cp -f *.manifest /tmp/firmware/ 2>/dev/null || true
+          cp -f config.buildinfo /tmp/firmware/ 2>/dev/null || true
+          ls -lh /tmp/firmware/
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-${{ env.DEVICE }}-wireguard
+          path: /tmp/firmware/
+          retention-days: 7
