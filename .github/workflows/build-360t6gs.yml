@@ -1,82 +1,200 @@
-name: Build ImmortalWrt 360T6GS with Custom DTS & WireGuard
+name: Build ImmortalWrt for 360T6GS
 
 on:
   workflow_dispatch:
 
 env:
-  DEVICE: "360_360t6gs"
-  OPENWRT_PATH: "openwrt"
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-18.06
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Jakarta
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Builder Repo
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Setup Build Environment
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git libncurses5-dev \
-            libssl-dev python3 python3-distutils rsync unzip zlib1g-dev \
-            file wget ccache || sudo apt install -y python3.10-distutils
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip zlib1g-dev file wget \
+        subversion ccache upx xsltproc libxml-parser-perl
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
 
-      - name: Clone Custom ImmortalWrt Source (kelvinzer0)
-        run: |
-          git clone --depth=1 https://github.com/kelvinzer0/immortalwrt.git -b openwrt-18.06 $OPENWRT_PATH
-          # Ensure custom DTS is strictly in place
-          if [ -f dts/mt7621_360_360t6gs.dts ]; then
-            cp -f dts/mt7621_360_360t6gs.dts $OPENWRT_PATH/target/linux/ramips/dts/
-          fi
+    - name: Clone source code
+      run: |
+        df -hT $PWD
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        cd openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
 
-      - name: Configure Build
-        run: |
-          cd $OPENWRT_PATH
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-      
-          cat << 'CONFIG_EOF' > .config
-          CONFIG_TARGET_ramips=y
-          CONFIG_TARGET_ramips_mt7621=y
-          CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
-          CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_PACKAGE_kmod-mt7915e=y
-          CONFIG_PACKAGE_kmod-mt7915-firmware=y
-          
-          # WireGuard Built-in
-          CONFIG_PACKAGE_kmod-wireguard=y
-          CONFIG_PACKAGE_wireguard-tools=y
-          CONFIG_PACKAGE_luci-proto-wireguard=y
-          CONFIG_PACKAGE_luci-app-wireguard=y
-          
-          # Size optimization for 16MB Flash
-          # CONFIG_PACKAGE_luci-app-samba4 is not set
-          # CONFIG_PACKAGE_luci-app-zerotier is not set
-          # CONFIG_PACKAGE_luci-app-aria2 is not set
-          CONFIG_EOF
-      
-          make defconfig
+    - name: Copy custom files
+      run: |
+        if [ -f target/linux/ramips/dts/mt7621_360_360t6gs.dts ]; then
+          cp -f target/linux/ramips/dts/mt7621_360_360t6gs.dts $OPENWRT_PATH/target/linux/ramips/dts/
+          echo "✓ DTS file copied"
+        else
+          echo "⚠ DTS file not found, using default"
+        fi
+        
+        if [ -f target/linux/ramips/image/mt7621.mk ]; then
+          cp -f target/linux/ramips/image/mt7621.mk $OPENWRT_PATH/target/linux/ramips/image/
+          echo "✓ Image makefile copied"
+        else
+          echo "⚠ Image makefile not found, using default"
+        fi
 
-      - name: Download & Build
-        run: |
-          cd $OPENWRT_PATH
-          make -j$(nproc) download || true
-          make -j$(($(nproc) + 1))
+    - name: Verify device support
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== Checking for 360T6GS device support ==="
+        if grep -r "360t6gs\|360_360t6gs" target/linux/ramips/; then
+          echo "✓ Device found in source tree"
+        else
+          echo "::warning::Device not found in default source."
+        fi
 
-      - name: Prepare Clean Artifacts
-        run: |
-          cd $OPENWRT_PATH/bin/targets/ramips/mt7621/
-          mkdir -p /tmp/firmware
-          cp -f *360t6gs*.bin /tmp/firmware/ 2>/dev/null || cp -f *.bin /tmp/firmware/ 2>/dev/null || true
-          cp -f *.manifest /tmp/firmware/ 2>/dev/null || true
-          cp -f config.buildinfo /tmp/firmware/ 2>/dev/null || true
-          ls -lh /tmp/firmware/
+    - name: Update feeds
+      run: |
+        cd $OPENWRT_PATH
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-      - name: Upload Firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: immortalwrt-${{ env.DEVICE }}-custom-wireguard
-          path: /tmp/firmware/
-          retention-days: 7
+    - name: Generate configuration file
+      run: |
+        cd $OPENWRT_PATH
+        
+        echo "=== Creating configuration based on working release 2026.01.21-1858 ==="
+        cat > .config <<'CONFIG_EOF'
+CONFIG_TARGET_ramips=y
+CONFIG_TARGET_ramips_mt7621=y
+CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=48
+
+# WiFi drivers & firmware
+CONFIG_PACKAGE_kmod-mt7915e=y
+CONFIG_PACKAGE_kmod-mt7915-firmware=y
+
+# Captive portal & Web Services (exact match to working release)
+CONFIG_PACKAGE_opennds=y
+CONFIG_PACKAGE_uhttpd=y
+CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_libmicrohttpd-no-ssl=y
+
+# DNS
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_dnsmasq=n
+
+# WireGuard Built-in Support
+CONFIG_PACKAGE_kmod-wireguard=y
+CONFIG_PACKAGE_wireguard-tools=y
+CONFIG_PACKAGE_luci-proto-wireguard=y
+
+# Remove unnecessary heavy packages to prevent flash overflow
+CONFIG_PACKAGE_ppp=n
+CONFIG_PACKAGE_ppp-mod-pppoe=n
+CONFIG_PACKAGE_luci-app-samba4=n
+CONFIG_PACKAGE_luci-app-zerotier=n
+
+# Enable CCACHE
+CONFIG_CCACHE=y
+CONFIG_EOF
+        
+        echo "=== Running defconfig ==="
+        set +e
+        make defconfig 2>&1 | tee defconfig.log
+        DEFCONFIG_EXIT=$?
+        set -e
+        
+        if [ ! -f .config ]; then
+          echo "::error::.config file not created!"
+          exit 1
+        fi
+        
+        echo "=== Verifying device config ==="
+        grep "CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs" .config || true
+        grep "CONFIG_PACKAGE_kmod-wireguard" .config || true
+        grep "CONFIG_PACKAGE_kmod-mt7915" .config || true
+
+    - name: Download package
+      id: package
+      run: |
+        cd $OPENWRT_PATH
+        make download -j$(nproc) || make download -j1 V=s
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile firmware
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        export CCACHE_DIR="$OPENWRT_PATH/ccache"
+        export CCACHE_BASEDIR="$OPENWRT_PATH"
+        mkdir -p "$CCACHE_DIR"
+        
+        make -j$(($(nproc) + 1)) || make -j1 V=s || {
+          echo "::error::Compilation failed!"
+          tail -200 logs/*.log 2>/dev/null || true
+          exit 1
+        }
+        
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Organize files
+      id: organize
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        set -e
+        FIRMWARE_DIR=$(find $OPENWRT_PATH/bin/targets -type d -name "*360*" -o -type d -name "*mt7621*" | head -n1)
+        cd "$FIRMWARE_DIR"
+        
+        UPLOAD_DIR="$HOME/firmware_upload"
+        mkdir -p "$UPLOAD_DIR"
+        
+        # Copy only binary firmware images & metadata
+        cp -f *.bin "$UPLOAD_DIR/" 2>/dev/null || true
+        cp -f *.manifest "$UPLOAD_DIR/" 2>/dev/null || true
+        cp -f config.buildinfo "$UPLOAD_DIR/" 2>/dev/null || true
+        
+        echo "=== Built firmware files ==="
+        ls -lh "$UPLOAD_DIR"
+        echo "FIRMWARE_DIR=$UPLOAD_DIR" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@v2
+      if: steps.organize.outputs.status == 'success'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.FILE_DATE }}
+        name: "ImmortalWrt 360T6GS Build ${{ env.FILE_DATE }}"
+        files: ${{ env.FIRMWARE_DIR }}/*
+        draft: false
+        prerelease: false
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success'
+      with:
+        name: immortalwrt-${{ env.DEVICE_NAME }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_DIR }}/
+        retention-days: 14
