@@ -9,9 +9,8 @@ permissions:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_URL: https://github.com/kelvinzer0/immortalwrt
   REPO_BRANCH: openwrt-23.05
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Jakarta
@@ -21,11 +20,6 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -46,30 +40,21 @@ jobs:
         cd openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
 
-    - name: Copy custom files
-      run: |
-        if [ -f target/linux/ramips/dts/mt7621_360_360t6gs.dts ]; then
-          cp -f target/linux/ramips/dts/mt7621_360_360t6gs.dts $OPENWRT_PATH/target/linux/ramips/dts/
-          echo "✓ DTS file copied"
-        else
-          echo "⚠ DTS file not found, using default"
-        fi
-        
-        if [ -f target/linux/ramips/image/mt7621.mk ]; then
-          cp -f target/linux/ramips/image/mt7621.mk $OPENWRT_PATH/target/linux/ramips/image/
-          echo "✓ Image makefile copied"
-        else
-          echo "⚠ Image makefile not found, using default"
-        fi
-
     - name: Verify device support
       run: |
         cd $OPENWRT_PATH
         echo "=== Checking for 360T6GS device support ==="
-        if grep -r "360t6gs\|360_360t6gs" target/linux/ramips/; then
-          echo "✓ Device found in source tree"
+        if grep -r "360_360t6gs" target/linux/ramips/image/mt7621.mk; then
+          echo "✓ Device definition found in mt7621.mk"
         else
-          echo "::warning::Device not found in default source."
+          echo "::error::Device 360_360t6gs NOT found in source tree!"
+          exit 1
+        fi
+        if [ -f target/linux/ramips/dts/mt7621_360_360t6gs.dts ]; then
+          echo "✓ DTS file found"
+        else
+          echo "::error::DTS file NOT found!"
+          exit 1
         fi
 
     - name: Update feeds
@@ -81,52 +66,48 @@ jobs:
     - name: Generate configuration file
       run: |
         cd $OPENWRT_PATH
-        
-        echo "=== Creating configuration based on working release 2026.01.21-1858 ==="
+
+        echo "=== Creating .config identical to working release 2026.01.21-1858 + WireGuard ==="
         cat > .config <<'CONFIG_EOF'
         CONFIG_TARGET_ramips=y
         CONFIG_TARGET_ramips_mt7621=y
         CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs=y
-        CONFIG_TARGET_ROOTFS_INITRAMFS=y
-        CONFIG_TARGET_ROOTFS_SQUASHFS=y
-        CONFIG_TARGET_ROOTFS_PARTSIZE=48
-        CONFIG_PACKAGE_kmod-mt7915e=y
-        CONFIG_PACKAGE_kmod-mt7915-firmware=y
-        CONFIG_PACKAGE_opennds=y
-        CONFIG_PACKAGE_uhttpd=y
-        CONFIG_PACKAGE_uhttpd-mod-ubus=y
+        # CONFIG_PACKAGE_kmod-crypto-arc4 is not set
+        # CONFIG_PACKAGE_kmod-crypto-ecb is not set
+        # CONFIG_PACKAGE_kmod-crypto-sha1 is not set
+        # CONFIG_PACKAGE_kmod-lib-crc-ccitt is not set
+        # CONFIG_PACKAGE_kmod-macvlan is not set
+        # CONFIG_PACKAGE_kmod-ppp is not set
         CONFIG_PACKAGE_libmicrohttpd-no-ssl=y
-        CONFIG_PACKAGE_dnsmasq-full=y
-        CONFIG_PACKAGE_dnsmasq=n
+        CONFIG_PACKAGE_opennds=y
+        # CONFIG_PACKAGE_ppp is not set
+        # CONFIG_PACKAGE_shellsync is not set
         CONFIG_PACKAGE_kmod-wireguard=y
         CONFIG_PACKAGE_wireguard-tools=y
         CONFIG_PACKAGE_luci-proto-wireguard=y
-        CONFIG_PACKAGE_ppp=n
-        CONFIG_PACKAGE_ppp-mod-pppoe=n
-        CONFIG_PACKAGE_luci-app-samba4=n
-        CONFIG_PACKAGE_luci-app-zerotier=n
-        CONFIG_CCACHE=y
         CONFIG_EOF
-        
+
         sed -i 's/^[ \t]*//' .config
-        
+
         echo "=== Running defconfig ==="
-        set +e
         make defconfig 2>&1 | tee defconfig.log
-        DEFCONFIG_EXIT=$?
-        set -e
-        
+
         if [ ! -f .config ]; then
           echo "::error::.config file not created!"
           exit 1
         fi
-        
-        echo "=== Verifying device config ==="
-        grep "CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs" .config || true
-        grep "CONFIG_PACKAGE_kmod-wireguard" .config || true
-        grep "CONFIG_PACKAGE_kmod-mt7915" .config || true
 
-    - name: Download package
+        echo "=== Verifying critical config ==="
+        echo "--- Device ---"
+        grep "CONFIG_TARGET_ramips_mt7621_DEVICE_360_360t6gs" .config
+        echo "--- WireGuard ---"
+        grep "CONFIG_PACKAGE_kmod-wireguard" .config || true
+        grep "CONFIG_PACKAGE_wireguard-tools" .config || true
+        grep "CONFIG_PACKAGE_luci-proto-wireguard" .config || true
+        echo "--- Kernel ---"
+        grep "CONFIG_LINUX_5_15" .config || true
+
+    - name: Download packages
       id: package
       run: |
         cd $OPENWRT_PATH
@@ -138,19 +119,19 @@ jobs:
       id: compile
       run: |
         cd $OPENWRT_PATH
-        export CCACHE_DIR="$OPENWRT_PATH/ccache"
-        export CCACHE_BASEDIR="$OPENWRT_PATH"
-        mkdir -p "$CCACHE_DIR"
-        
+        echo "=== Starting compilation with $(nproc) threads ==="
+
         make -j$(($(nproc) + 1)) || make -j1 V=s || {
           echo "::error::Compilation failed!"
           tail -200 logs/*.log 2>/dev/null || true
           exit 1
         }
-        
+
+        echo "✓ Compilation successful"
+
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Organize files
@@ -158,18 +139,37 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       run: |
         set -e
-        FIRMWARE_DIR=$(find $OPENWRT_PATH/bin/targets -type d -name "*360*" -o -type d -name "*mt7621*" | head -n1)
+        FIRMWARE_DIR=$(find $OPENWRT_PATH/bin/targets/ramips/mt7621 -maxdepth 0 -type d 2>/dev/null || \
+                       find $OPENWRT_PATH/bin/targets -type d -mindepth 2 -maxdepth 2 | head -n1)
         cd "$FIRMWARE_DIR"
-        
+
         UPLOAD_DIR="$HOME/firmware_upload"
         mkdir -p "$UPLOAD_DIR"
-        
+
         cp -f *.bin "$UPLOAD_DIR/" 2>/dev/null || true
         cp -f *.manifest "$UPLOAD_DIR/" 2>/dev/null || true
         cp -f config.buildinfo "$UPLOAD_DIR/" 2>/dev/null || true
-        
+        cp -f feeds.buildinfo "$UPLOAD_DIR/" 2>/dev/null || true
+        cp -f version.buildinfo "$UPLOAD_DIR/" 2>/dev/null || true
+
         echo "=== Built firmware files ==="
         ls -lh "$UPLOAD_DIR"
+
+        # Size sanity check
+        for file in "$UPLOAD_DIR"/*-sysupgrade.bin; do
+          if [ -f "$file" ]; then
+            SIZE=$(stat -c%s "$file")
+            SIZE_MB=$((SIZE / 1024 / 1024))
+            echo "Sysupgrade size: ${SIZE_MB}MB ($(stat -c%s "$file") bytes)"
+            if [ $SIZE -lt 7000000 ]; then
+              echo "::warning::Firmware suspiciously small (<7MB). Possible missing packages!"
+            fi
+            if [ $SIZE -gt 15000000 ]; then
+              echo "::warning::Firmware too large (>15MB). Will not fit in 16MB flash!"
+            fi
+          fi
+        done
+
         echo "FIRMWARE_DIR=$UPLOAD_DIR" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
