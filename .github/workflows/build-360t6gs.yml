@@ -96,6 +96,9 @@ jobs:
         CONFIG_PACKAGE_wireguard-tools=y
         CONFIG_PACKAGE_luci-proto-wireguard=y
 
+        # Multi-WAN load balancer
+        CONFIG_PACKAGE_mwan3=y
+
         # Remove unnecessary packages
         # CONFIG_PACKAGE_ppp is not set
         # CONFIG_PACKAGE_ppp-mod-pppoe is not set
